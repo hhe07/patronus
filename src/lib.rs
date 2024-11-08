@@ -11,3 +11,4 @@ pub mod sim;
 mod smt;
 pub mod sym;
 pub mod system;
+mod verilog;
