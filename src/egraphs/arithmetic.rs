@@ -3,7 +3,8 @@
 // author: Kevin Laeufer <laeufer@cornell.edu>
 
 use crate::expr::*;
-use egg::Language;
+use baa::BitVecOps;
+use egg::{Language, RecExpr};
 use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
 
@@ -12,22 +13,20 @@ use std::fmt::{Display, Formatter};
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum Arith {
     Symbol(StringRef, WidthInt),
-    BinOp(
-        [egg::Id; 2],
-        BinOp,
-        WidthInt,
-        WidthInt,
-        bool,
-        WidthInt,
-        bool,
-    ),
+    /// arguments: w, w_a, s_a, a, w_b, s_b, b
+    BinOp([egg::Id; 7], BinOp),
+    Width(WidthInt),
+    Signed(bool),
 }
 
 impl Display for Arith {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Arith::Symbol(name, _) => write!(f, "{:?}", name),
-            Arith::BinOp(_, op, wo, wa, sa, wb, sb) => write!(f, "{op} {wo} {wa} {sa} {wb} {sb}"),
+            Arith::BinOp(_, op) => write!(f, "{op}"),
+            Arith::Width(w) => write!(f, "{w}"),
+            Arith::Signed(true) => write!(f, "signed"),
+            Arith::Signed(false) => write!(f, ""),
         }
     }
 }
@@ -55,7 +54,7 @@ impl Display for BinOp {
     }
 }
 
-impl egg::Language for Arith {
+impl Language for Arith {
     fn matches(&self, other: &Self) -> bool {
         // quick check to ensure that we are comparing the same kind of expression
         if std::mem::discriminant(self) != std::mem::discriminant(other) {
@@ -64,17 +63,8 @@ impl egg::Language for Arith {
         // special comparisons for additional attributes
         match (self, other) {
             (Arith::Symbol(n0, w0), Arith::Symbol(n1, w1)) => n0 == n1 && w0 == w1,
-            (
-                Arith::BinOp(_, o0, wo_0, wa_0, sa_0, wb_0, sb_0),
-                Arith::BinOp(_, o1, wo_1, wa_1, sa_1, wb_1, sb_1),
-            ) => {
-                o0 == o1
-                    && wo_0 == wo_1
-                    && wa_0 == wa_1
-                    && wb_0 == wb_1
-                    && sa_0 == sa_1
-                    && sb_0 == sb_1
-            }
+            (Arith::BinOp(_, o0), Arith::BinOp(_, o1)) => o0 == o1,
+
             (_, _) => todo!("Compare {self:?} and {other:?}"),
         }
     }
@@ -82,14 +72,14 @@ impl egg::Language for Arith {
     fn children(&self) -> &[egg::Id] {
         match self {
             Arith::BinOp(cc, ..) => cc,
-            Arith::Symbol(_, _) => &[],
+            _ => &[],
         }
     }
 
     fn children_mut(&mut self) -> &mut [egg::Id] {
         match self {
             Arith::BinOp(cc, ..) => cc,
-            Arith::Symbol(_, _) => &mut [],
+            _ => &mut [],
         }
     }
 }
@@ -116,60 +106,66 @@ pub fn to_arith(ctx: &Context, e: ExprRef) -> egg::RecExpr<Arith> {
         },
         |_ctx, expr, children| match ctx[expr].clone() {
             Expr::BVSymbol { name, width } => out.add(Arith::Symbol(name, width)),
-            Expr::BVAdd(a, b, width) => out.add(convert_bin_op(
+            Expr::BVAdd(a, b, width) => convert_bin_op(
                 ctx,
+                &mut out,
                 BinOp::Add,
                 a,
                 b,
                 width,
                 children[0],
                 children[1],
-            )),
-            Expr::BVSub(a, b, width) => out.add(convert_bin_op(
+            ),
+            Expr::BVSub(a, b, width) => convert_bin_op(
                 ctx,
+                &mut out,
                 BinOp::Sub,
                 a,
                 b,
                 width,
                 children[0],
                 children[1],
-            )),
-            Expr::BVMul(a, b, width) => out.add(convert_bin_op(
+            ),
+            Expr::BVMul(a, b, width) => convert_bin_op(
                 ctx,
+                &mut out,
                 BinOp::Mul,
                 a,
                 b,
                 width,
                 children[0],
                 children[1],
-            )),
-            Expr::BVShiftLeft(a, b, width) => out.add(convert_bin_op(
+            ),
+            Expr::BVShiftLeft(a, b, width) => convert_bin_op(
                 ctx,
+                &mut out,
                 BinOp::LeftShift,
                 a,
                 b,
                 width,
                 children[0],
                 children[1],
-            )),
-            Expr::BVShiftRight(a, b, width) => out.add(convert_bin_op(
+            ),
+            Expr::BVShiftRight(a, b, width) => convert_bin_op(
                 ctx,
+                &mut out,
                 BinOp::RightShift,
                 a,
                 b,
                 width,
                 children[0],
                 children[1],
-            )),
-            Expr::BVArithmeticShiftRight(a, b, width) => out.add(convert_bin_op(
+            ),
+            Expr::BVArithmeticShiftRight(a, b, width) => convert_bin_op(
                 ctx,
+                &mut out,
                 BinOp::ArithmeticRightShift,
                 a,
                 b,
                 width,
                 children[0],
                 children[1],
-            )),
+            ),
             _ => todo!("{}", expr.serialize_to_str(ctx)),
         },
     );
@@ -178,13 +174,14 @@ pub fn to_arith(ctx: &Context, e: ExprRef) -> egg::RecExpr<Arith> {
 
 fn convert_bin_op(
     ctx: &Context,
+    out: &mut RecExpr<Arith>,
     op: BinOp,
     a: ExprRef,
     b: ExprRef,
     width_out: WidthInt,
     converted_a: egg::Id,
     converted_b: egg::Id,
-) -> Arith {
+) -> egg::Id {
     // see the actual children (excluding any extensions) and determine sign
     let (base_a, sign_a) = remove_ext(ctx, a);
     let width_a = base_a.get_bv_type(ctx).unwrap();
@@ -192,15 +189,24 @@ fn convert_bin_op(
     let width_b = base_b.get_bv_type(ctx).unwrap();
     debug_assert_eq!(width_out, a.get_bv_type(ctx).unwrap());
     debug_assert_eq!(width_out, b.get_bv_type(ctx).unwrap());
-    Arith::BinOp(
-        [converted_b, converted_a],
+    // convert signedness and widths into e-nodes
+    let width_out = out.add(Arith::Width(width_out));
+    let width_a = out.add(Arith::Width(width_a));
+    let width_b = out.add(Arith::Width(width_b));
+    let sign_a = out.add(Arith::Signed(sign_a));
+    let sign_b = out.add(Arith::Signed(sign_b));
+    out.add(Arith::BinOp(
+        [
+            width_out,
+            width_a,
+            sign_a,
+            converted_b,
+            width_b,
+            sign_b,
+            converted_a,
+        ],
         op,
-        width_out,
-        width_a,
-        sign_a,
-        width_b,
-        sign_b,
-    )
+    ))
 }
 
 /// Removes any sign or zero extend expressions and returns whether the removed extension was signed.
@@ -233,9 +239,14 @@ pub fn from_arith(ctx: &mut Context, expr: &egg::RecExpr<Arith>) -> ExprRef {
         // Otherwise, all arguments are available on the stack for us to use.
         let result = match expr {
             Arith::Symbol(name, width) => ctx.symbol(*name, Type::BV(*width)),
-            Arith::BinOp(_, op, wo, wa, sa, wb, sb) => {
-                let a = extend(ctx, stack.pop().unwrap(), *wo, *wa, *sa);
-                let b = extend(ctx, stack.pop().unwrap(), *wo, *wb, *sb);
+            Arith::BinOp(_, op) => {
+                let wo = get_u64(ctx, stack.pop().unwrap()) as WidthInt;
+                let wa = get_u64(ctx, stack.pop().unwrap()) as WidthInt;
+                let sa = get_u64(ctx, stack.pop().unwrap()) != 0;
+                let a = extend(ctx, stack.pop().unwrap(), wo, wa, sa);
+                let wb = get_u64(ctx, stack.pop().unwrap()) as WidthInt;
+                let sb = get_u64(ctx, stack.pop().unwrap()) != 0;
+                let b = extend(ctx, stack.pop().unwrap(), wo, wb, sb);
                 match op {
                     BinOp::Add => ctx.add(a, b),
                     BinOp::Sub => ctx.sub(a, b),
@@ -245,12 +256,24 @@ pub fn from_arith(ctx: &mut Context, expr: &egg::RecExpr<Arith>) -> ExprRef {
                     BinOp::ArithmeticRightShift => ctx.arithmetic_shift_right(a, b),
                 }
             }
+            Arith::Width(width) => ctx.bit_vec_val(*width, 32),
+            Arith::Signed(is_minus) => ctx.bit_vec_val(*is_minus, 1),
         };
         stack.push(result);
     }
 
     debug_assert_eq!(stack.len(), 1);
     stack.pop().unwrap()
+}
+
+fn get_u64(ctx: &Context, e: ExprRef) -> u64 {
+    match &ctx[e] {
+        Expr::BVLiteral(value) => value.get(ctx).to_u64().unwrap(),
+        other => unreachable!(
+            "{} is not a bit vector literal!",
+            other.serialize_to_str(ctx)
+        ),
+    }
 }
 
 fn extend(
