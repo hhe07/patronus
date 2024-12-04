@@ -4,7 +4,7 @@
 
 use crate::expr::*;
 use baa::BitVecOps;
-use egg::{define_language, Id, Language, RecExpr};
+use egg::{define_language, rewrite, Id, Language, RecExpr, Var};
 use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -253,6 +253,51 @@ fn extend(
     }
 }
 
+type EGraph = egg::EGraph<Arith, ()>;
+
+fn create_rewrites() -> Vec<egg::Rewrite<Arith, ()>> {
+    vec![
+        rewrite!("commute-add"; "(+ ?wo ?wa ?sa ?a ?wb ?sb ?b)" => "(+ ?wo ?wb ?sb ?b ?wa ?sa ?a)" if commute_add_condition("?wo", "?wa", "?sa", "?wb", "?sb")),
+    ]
+}
+
+fn commute_add_condition(
+    wo: &'static str,
+    wa: &'static str,
+    sa: &'static str,
+    wb: &'static str,
+    sb: &'static str,
+) -> impl Fn(&mut EGraph, egg::Id, &egg::Subst) -> bool {
+    let wo = wo.parse().unwrap();
+    let wa = wa.parse().unwrap();
+    let sa = sa.parse().unwrap();
+    let wb = wb.parse().unwrap();
+    let sb = sb.parse().unwrap();
+    move |egraph, _, subst| {
+        let wo = get_width_from_e_graph(egraph, subst, wo);
+        let wa = get_width_from_e_graph(egraph, subst, wa);
+        let wb = get_width_from_e_graph(egraph, subst, wb);
+        let sa = get_signed_from_e_graph(egraph, subst, sa);
+        let sb = get_signed_from_e_graph(egraph, subst, sb);
+        // actual condition
+        wa == wb && wo >= wa
+    }
+}
+
+fn get_width_from_e_graph(egraph: &mut EGraph, subst: &egg::Subst, v: Var) -> WidthInt {
+    match egraph[subst[v]].nodes.as_slice() {
+        [Arith::Width(w)] => *w,
+        _ => unreachable!("expected a width!"),
+    }
+}
+
+fn get_signed_from_e_graph(egraph: &mut EGraph, subst: &egg::Subst, v: Var) -> bool {
+    match egraph[subst[v]].nodes.as_slice() {
+        [Arith::Signed(s)] => *s,
+        _ => unreachable!("expected a signed!"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,5 +332,29 @@ mod tests {
         // because of hash consing, we should get the exact same expr ref back
         assert_eq!(spec_back, spec);
         assert_eq!(impl_back, implementation);
+    }
+
+    #[test]
+    fn test_rewrites() {
+        let mut ctx = Context::default();
+        let a = ctx.bv_symbol("A", 16);
+        let b = ctx.bv_symbol("B", 16);
+        let in_smt_expr = ctx.add(a, b);
+        assert_eq!(in_smt_expr.serialize_to_str(&ctx), "add(A, B)");
+
+        // run egraph operations
+        let egg_expr_in = to_arith(&ctx, in_smt_expr);
+        let runner = egg::Runner::default()
+            .with_expr(&egg_expr_in)
+            .run(&create_rewrites());
+
+        // check how many different nodes are representing the root node now
+        let root = runner.roots[0];
+        let root_nodes = &runner.egraph[root].nodes;
+        assert_eq!(
+            root_nodes.len(),
+            2,
+            "there should be two nodes if the rule has been applied"
+        );
     }
 }
