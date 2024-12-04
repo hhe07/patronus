@@ -4,88 +4,45 @@
 
 use crate::expr::*;
 use baa::BitVecOps;
-use egg::{Language, RecExpr};
+use egg::{define_language, Id, Language, RecExpr};
 use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
+use std::str::FromStr;
 
-/// Intermediate expression language for bit vector arithmetic rewrites.
-/// Inspired by: "ROVER: RTL Optimization via Verified E-Graph Rewriting" (TCAD'24)
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-pub enum Arith {
-    Symbol(StringRef, WidthInt),
-    /// arguments: w, w_a, s_a, a, w_b, s_b, b
-    Add([egg::Id; 7]),
-    Sub([egg::Id; 7]),
-    Mul([egg::Id; 7]),
-    LeftShift([egg::Id; 7]),
-    RightShift([egg::Id; 7]),
-    ArithmeticRightShift([egg::Id; 7]),
-    Width(WidthInt),
-    Signed(bool),
+define_language! {
+    /// Intermediate expression language for bit vector arithmetic rewrites.
+    /// Inspired by: "ROVER: RTL Optimization via Verified E-Graph Rewriting" (TCAD'24)
+    /// arguments for binop: w, w_a, s_a, a, w_b, s_b, b
+    pub enum Arith {
+        "+" = Add([Id; 7]),
+        "-" = Sub([Id; 7]),
+        "*" = Mul([Id; 7]),
+        "<<" = LeftShift([Id; 7]),
+        ">>" = RightShift([Id; 7]),
+        ">>>" = ArithmeticRightShift([Id; 7]),
+        Symbol(ArithSymbol),
+        Width(WidthInt),
+        Signed(bool),
+    }
 }
 
-impl Display for Arith {
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
+pub struct ArithSymbol {
+    name: StringRef,
+    width: WidthInt,
+}
+
+impl FromStr for ArithSymbol {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        todo!()
+    }
+}
+
+impl Display for ArithSymbol {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Arith::Symbol(name, _) => write!(f, "{:?}", name),
-            Arith::Add(_) => write!(f, "+"),
-            Arith::Sub(_) => write!(f, "+"),
-            Arith::Mul(_) => write!(f, "+"),
-            Arith::LeftShift(_) => write!(f, "+"),
-            Arith::RightShift(_) => write!(f, "+"),
-            Arith::ArithmeticRightShift(_) => write!(f, "+"),
-            Arith::Width(w) => write!(f, "{w}"),
-            Arith::Signed(true) => write!(f, "signed"),
-            Arith::Signed(false) => write!(f, ""),
-        }
-    }
-}
-
-impl Language for Arith {
-    fn matches(&self, other: &Self) -> bool {
-        // quick check to ensure that we are comparing the same kind of expression
-        if std::mem::discriminant(self) != std::mem::discriminant(other) {
-            return false;
-        }
-        // special comparisons for additional attributes
-        match (self, other) {
-            (Arith::Symbol(n0, w0), Arith::Symbol(n1, w1)) => n0 == n1 && w0 == w1,
-            (Arith::Width(w0), Arith::Width(w1)) => w0 == w1,
-            (Arith::Signed(s0), Arith::Signed(s1)) => s0 == s1,
-            (_, _) => true,
-        }
-    }
-
-    fn children(&self) -> &[egg::Id] {
-        match self {
-            Arith::Add(cc) => cc,
-            Arith::Sub(cc) => cc,
-            Arith::Mul(cc) => cc,
-            Arith::LeftShift(cc) => cc,
-            Arith::RightShift(cc) => cc,
-            Arith::ArithmeticRightShift(cc) => cc,
-            _ => &[],
-        }
-    }
-
-    fn children_mut(&mut self) -> &mut [egg::Id] {
-        match self {
-            Arith::Add(cc) => cc,
-            Arith::Sub(cc) => cc,
-            Arith::Mul(cc) => cc,
-            Arith::LeftShift(cc) => cc,
-            Arith::RightShift(cc) => cc,
-            Arith::ArithmeticRightShift(cc) => cc,
-            _ => &mut [],
-        }
-    }
-}
-
-impl egg::FromOp for Arith {
-    type Error = ();
-
-    fn from_op(op: &str, _children: Vec<egg::Id>) -> Result<Self, Self::Error> {
-        todo!("from_op({op})")
+        todo!()
     }
 }
 
@@ -102,11 +59,11 @@ pub fn to_arith(ctx: &Context, e: ExprRef) -> egg::RecExpr<Arith> {
             });
         },
         |_ctx, expr, children| match ctx[expr].clone() {
-            Expr::BVSymbol { name, width } => out.add(Arith::Symbol(name, width)),
+            Expr::BVSymbol { name, width } => out.add(Arith::Symbol(ArithSymbol { name, width })),
             Expr::BVAdd(a, b, width) => convert_bin_op(
                 ctx,
                 &mut out,
-                |cc| Arith::Add(cc),
+                Arith::Add,
                 a,
                 b,
                 width,
@@ -116,7 +73,7 @@ pub fn to_arith(ctx: &Context, e: ExprRef) -> egg::RecExpr<Arith> {
             Expr::BVSub(a, b, width) => convert_bin_op(
                 ctx,
                 &mut out,
-                |cc| Arith::Sub(cc),
+                Arith::Sub,
                 a,
                 b,
                 width,
@@ -126,7 +83,7 @@ pub fn to_arith(ctx: &Context, e: ExprRef) -> egg::RecExpr<Arith> {
             Expr::BVMul(a, b, width) => convert_bin_op(
                 ctx,
                 &mut out,
-                |cc| Arith::Mul(cc),
+                Arith::Mul,
                 a,
                 b,
                 width,
@@ -136,7 +93,7 @@ pub fn to_arith(ctx: &Context, e: ExprRef) -> egg::RecExpr<Arith> {
             Expr::BVShiftLeft(a, b, width) => convert_bin_op(
                 ctx,
                 &mut out,
-                |cc| Arith::LeftShift(cc),
+                Arith::LeftShift,
                 a,
                 b,
                 width,
@@ -146,7 +103,7 @@ pub fn to_arith(ctx: &Context, e: ExprRef) -> egg::RecExpr<Arith> {
             Expr::BVShiftRight(a, b, width) => convert_bin_op(
                 ctx,
                 &mut out,
-                |cc| Arith::RightShift(cc),
+                Arith::RightShift,
                 a,
                 b,
                 width,
@@ -156,7 +113,7 @@ pub fn to_arith(ctx: &Context, e: ExprRef) -> egg::RecExpr<Arith> {
             Expr::BVArithmeticShiftRight(a, b, width) => convert_bin_op(
                 ctx,
                 &mut out,
-                |cc| Arith::ArithmeticRightShift(cc),
+                Arith::ArithmeticRightShift,
                 a,
                 b,
                 width,
@@ -172,13 +129,13 @@ pub fn to_arith(ctx: &Context, e: ExprRef) -> egg::RecExpr<Arith> {
 fn convert_bin_op(
     ctx: &Context,
     out: &mut RecExpr<Arith>,
-    op: fn([egg::Id; 7]) -> Arith,
+    op: fn([Id; 7]) -> Arith,
     a: ExprRef,
     b: ExprRef,
     width_out: WidthInt,
-    converted_a: egg::Id,
-    converted_b: egg::Id,
-) -> egg::Id {
+    converted_a: Id,
+    converted_b: Id,
+) -> Id {
     // see the actual children (excluding any extensions) and determine sign
     let (base_a, sign_a) = remove_ext(ctx, a);
     let width_a = base_a.get_bv_type(ctx).unwrap();
@@ -232,7 +189,7 @@ pub fn from_arith(ctx: &mut Context, expr: &egg::RecExpr<Arith>) -> ExprRef {
 
         // Otherwise, all arguments are available on the stack for us to use.
         let result = match expr {
-            Arith::Symbol(name, width) => ctx.symbol(*name, Type::BV(*width)),
+            Arith::Symbol(ArithSymbol { name, width }) => ctx.symbol(*name, Type::BV(*width)),
             Arith::Add(_) => patronus_bin_op(ctx, &mut stack, |ctx, a, b| ctx.add(a, b)),
             Arith::Sub(_) => patronus_bin_op(ctx, &mut stack, |ctx, a, b| ctx.sub(a, b)),
             Arith::Mul(_) => patronus_bin_op(ctx, &mut stack, |ctx, a, b| ctx.mul(a, b)),
