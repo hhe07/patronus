@@ -14,7 +14,12 @@ use std::fmt::{Display, Formatter};
 pub enum Arith {
     Symbol(StringRef, WidthInt),
     /// arguments: w, w_a, s_a, a, w_b, s_b, b
-    BinOp([egg::Id; 7], BinOp),
+    Add([egg::Id; 7]),
+    Sub([egg::Id; 7]),
+    Mul([egg::Id; 7]),
+    LeftShift([egg::Id; 7]),
+    RightShift([egg::Id; 7]),
+    ArithmeticRightShift([egg::Id; 7]),
     Width(WidthInt),
     Signed(bool),
 }
@@ -23,33 +28,15 @@ impl Display for Arith {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Arith::Symbol(name, _) => write!(f, "{:?}", name),
-            Arith::BinOp(_, op) => write!(f, "{op}"),
+            Arith::Add(_) => write!(f, "+"),
+            Arith::Sub(_) => write!(f, "+"),
+            Arith::Mul(_) => write!(f, "+"),
+            Arith::LeftShift(_) => write!(f, "+"),
+            Arith::RightShift(_) => write!(f, "+"),
+            Arith::ArithmeticRightShift(_) => write!(f, "+"),
             Arith::Width(w) => write!(f, "{w}"),
             Arith::Signed(true) => write!(f, "signed"),
             Arith::Signed(false) => write!(f, ""),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-pub enum BinOp {
-    Add,
-    Sub,
-    Mul,
-    LeftShift,
-    RightShift,
-    ArithmeticRightShift,
-}
-
-impl Display for BinOp {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BinOp::Add => write!(f, "+"),
-            BinOp::Sub => write!(f, "-"),
-            BinOp::Mul => write!(f, "*"),
-            BinOp::LeftShift => write!(f, "<<"),
-            BinOp::RightShift => write!(f, ">>"),
-            BinOp::ArithmeticRightShift => write!(f, ">>>"),
         }
     }
 }
@@ -63,22 +50,32 @@ impl Language for Arith {
         // special comparisons for additional attributes
         match (self, other) {
             (Arith::Symbol(n0, w0), Arith::Symbol(n1, w1)) => n0 == n1 && w0 == w1,
-            (Arith::BinOp(_, o0), Arith::BinOp(_, o1)) => o0 == o1,
-
-            (_, _) => todo!("Compare {self:?} and {other:?}"),
+            (Arith::Width(w0), Arith::Width(w1)) => w0 == w1,
+            (Arith::Signed(s0), Arith::Signed(s1)) => s0 == s1,
+            (_, _) => true,
         }
     }
 
     fn children(&self) -> &[egg::Id] {
         match self {
-            Arith::BinOp(cc, ..) => cc,
+            Arith::Add(cc) => cc,
+            Arith::Sub(cc) => cc,
+            Arith::Mul(cc) => cc,
+            Arith::LeftShift(cc) => cc,
+            Arith::RightShift(cc) => cc,
+            Arith::ArithmeticRightShift(cc) => cc,
             _ => &[],
         }
     }
 
     fn children_mut(&mut self) -> &mut [egg::Id] {
         match self {
-            Arith::BinOp(cc, ..) => cc,
+            Arith::Add(cc) => cc,
+            Arith::Sub(cc) => cc,
+            Arith::Mul(cc) => cc,
+            Arith::LeftShift(cc) => cc,
+            Arith::RightShift(cc) => cc,
+            Arith::ArithmeticRightShift(cc) => cc,
             _ => &mut [],
         }
     }
@@ -109,7 +106,7 @@ pub fn to_arith(ctx: &Context, e: ExprRef) -> egg::RecExpr<Arith> {
             Expr::BVAdd(a, b, width) => convert_bin_op(
                 ctx,
                 &mut out,
-                BinOp::Add,
+                |cc| Arith::Add(cc),
                 a,
                 b,
                 width,
@@ -119,7 +116,7 @@ pub fn to_arith(ctx: &Context, e: ExprRef) -> egg::RecExpr<Arith> {
             Expr::BVSub(a, b, width) => convert_bin_op(
                 ctx,
                 &mut out,
-                BinOp::Sub,
+                |cc| Arith::Sub(cc),
                 a,
                 b,
                 width,
@@ -129,7 +126,7 @@ pub fn to_arith(ctx: &Context, e: ExprRef) -> egg::RecExpr<Arith> {
             Expr::BVMul(a, b, width) => convert_bin_op(
                 ctx,
                 &mut out,
-                BinOp::Mul,
+                |cc| Arith::Mul(cc),
                 a,
                 b,
                 width,
@@ -139,7 +136,7 @@ pub fn to_arith(ctx: &Context, e: ExprRef) -> egg::RecExpr<Arith> {
             Expr::BVShiftLeft(a, b, width) => convert_bin_op(
                 ctx,
                 &mut out,
-                BinOp::LeftShift,
+                |cc| Arith::LeftShift(cc),
                 a,
                 b,
                 width,
@@ -149,7 +146,7 @@ pub fn to_arith(ctx: &Context, e: ExprRef) -> egg::RecExpr<Arith> {
             Expr::BVShiftRight(a, b, width) => convert_bin_op(
                 ctx,
                 &mut out,
-                BinOp::RightShift,
+                |cc| Arith::RightShift(cc),
                 a,
                 b,
                 width,
@@ -159,7 +156,7 @@ pub fn to_arith(ctx: &Context, e: ExprRef) -> egg::RecExpr<Arith> {
             Expr::BVArithmeticShiftRight(a, b, width) => convert_bin_op(
                 ctx,
                 &mut out,
-                BinOp::ArithmeticRightShift,
+                |cc| Arith::ArithmeticRightShift(cc),
                 a,
                 b,
                 width,
@@ -175,7 +172,7 @@ pub fn to_arith(ctx: &Context, e: ExprRef) -> egg::RecExpr<Arith> {
 fn convert_bin_op(
     ctx: &Context,
     out: &mut RecExpr<Arith>,
-    op: BinOp,
+    op: fn([egg::Id; 7]) -> Arith,
     a: ExprRef,
     b: ExprRef,
     width_out: WidthInt,
@@ -195,18 +192,15 @@ fn convert_bin_op(
     let width_b = out.add(Arith::Width(width_b));
     let sign_a = out.add(Arith::Signed(sign_a));
     let sign_b = out.add(Arith::Signed(sign_b));
-    out.add(Arith::BinOp(
-        [
-            width_out,
-            width_a,
-            sign_a,
-            converted_b,
-            width_b,
-            sign_b,
-            converted_a,
-        ],
-        op,
-    ))
+    out.add(op([
+        width_out,
+        width_a,
+        sign_a,
+        converted_b,
+        width_b,
+        sign_b,
+        converted_a,
+    ]))
 }
 
 /// Removes any sign or zero extend expressions and returns whether the removed extension was signed.
@@ -239,23 +233,18 @@ pub fn from_arith(ctx: &mut Context, expr: &egg::RecExpr<Arith>) -> ExprRef {
         // Otherwise, all arguments are available on the stack for us to use.
         let result = match expr {
             Arith::Symbol(name, width) => ctx.symbol(*name, Type::BV(*width)),
-            Arith::BinOp(_, op) => {
-                let wo = get_u64(ctx, stack.pop().unwrap()) as WidthInt;
-                let wa = get_u64(ctx, stack.pop().unwrap()) as WidthInt;
-                let sa = get_u64(ctx, stack.pop().unwrap()) != 0;
-                let a = extend(ctx, stack.pop().unwrap(), wo, wa, sa);
-                let wb = get_u64(ctx, stack.pop().unwrap()) as WidthInt;
-                let sb = get_u64(ctx, stack.pop().unwrap()) != 0;
-                let b = extend(ctx, stack.pop().unwrap(), wo, wb, sb);
-                match op {
-                    BinOp::Add => ctx.add(a, b),
-                    BinOp::Sub => ctx.sub(a, b),
-                    BinOp::Mul => ctx.mul(a, b),
-                    BinOp::LeftShift => ctx.shift_left(a, b),
-                    BinOp::RightShift => ctx.shift_right(a, b),
-                    BinOp::ArithmeticRightShift => ctx.arithmetic_shift_right(a, b),
-                }
+            Arith::Add(_) => patronus_bin_op(ctx, &mut stack, |ctx, a, b| ctx.add(a, b)),
+            Arith::Sub(_) => patronus_bin_op(ctx, &mut stack, |ctx, a, b| ctx.sub(a, b)),
+            Arith::Mul(_) => patronus_bin_op(ctx, &mut stack, |ctx, a, b| ctx.mul(a, b)),
+            Arith::LeftShift(_) => {
+                patronus_bin_op(ctx, &mut stack, |ctx, a, b| ctx.shift_left(a, b))
             }
+            Arith::RightShift(_) => {
+                patronus_bin_op(ctx, &mut stack, |ctx, a, b| ctx.shift_right(a, b))
+            }
+            Arith::ArithmeticRightShift(_) => patronus_bin_op(ctx, &mut stack, |ctx, a, b| {
+                ctx.arithmetic_shift_right(a, b)
+            }),
             Arith::Width(width) => ctx.bit_vec_val(*width, 32),
             Arith::Signed(is_minus) => ctx.bit_vec_val(*is_minus, 1),
         };
@@ -264,6 +253,21 @@ pub fn from_arith(ctx: &mut Context, expr: &egg::RecExpr<Arith>) -> ExprRef {
 
     debug_assert_eq!(stack.len(), 1);
     stack.pop().unwrap()
+}
+
+fn patronus_bin_op(
+    ctx: &mut Context,
+    stack: &mut Vec<ExprRef>,
+    op: fn(&mut Context, ExprRef, ExprRef) -> ExprRef,
+) -> ExprRef {
+    let wo = get_u64(ctx, stack.pop().unwrap()) as WidthInt;
+    let wa = get_u64(ctx, stack.pop().unwrap()) as WidthInt;
+    let sa = get_u64(ctx, stack.pop().unwrap()) != 0;
+    let a = extend(ctx, stack.pop().unwrap(), wo, wa, sa);
+    let wb = get_u64(ctx, stack.pop().unwrap()) as WidthInt;
+    let sb = get_u64(ctx, stack.pop().unwrap()) != 0;
+    let b = extend(ctx, stack.pop().unwrap(), wo, wb, sb);
+    op(ctx, a, b)
 }
 
 fn get_u64(ctx: &Context, e: ExprRef) -> u64 {
