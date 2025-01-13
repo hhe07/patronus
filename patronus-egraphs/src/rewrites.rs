@@ -12,10 +12,11 @@ introspect them in order to check re-write conditions or debug matches.
 use crate::arithmetic::{eval_width_left_shift, eval_width_max_plus_1};
 use crate::{get_const_width_or_sign, is_bin_op, Arith, EGraph, WidthConstantFold};
 use egg::{
-    ConditionalApplier, ENodeOrVar, Id, Language, Pattern, PatternAst, Searcher, Subst, Var,
+    Analysis, ConditionalApplier, ENodeOrVar, Id, Language, Pattern, PatternAst, Searcher, Subst,
+    Symbol, Var,
 };
 use patronus::expr::WidthInt;
-use std::cmp::max;
+use std::cmp::{max, min};
 
 /// our version of the egg re-write macro
 macro_rules! arith_rewrite {
@@ -95,16 +96,42 @@ fn lsh_no_ov(wo: WidthInt, wa: WidthInt, wb: WidthInt) -> bool {
     wo >= eval_width_left_shift(wa, wb)
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum WidthConstraint {
+    AddNoOverflow(Var, Var),
+    MulNoOverflow(Var, Var),
+    LeftShiftNoOverflow(Var, Var),
+}
+
+impl WidthConstraint {
+    /// generates an output width that satisfied the constraint while trying to be minimal
+    #[inline]
+    fn min_out_width(&self, get_value: fn(Var) -> WidthInt) -> Option<WidthInt> {
+        match *self {
+            WidthConstraint::AddNoOverflow(wa, wb) => Some(max(get_value(wa), get_value(wb)) + 1),
+            WidthConstraint::MulNoOverflow(wa, wb) => Some(get_value(wa) + get_value(wb)),
+            WidthConstraint::LeftShiftNoOverflow(wa, wb) => {
+                let wb = get_value(wb);
+                if wb >= WidthInt::BITS {
+                    // very very very large width, not what you want
+                    Some(WidthInt::MAX)
+                } else {
+                    let max_shift: WidthInt = (1 << wb) - 1;
+                    Some(get_value(wa) + max_shift)
+                }
+            }
+        }
+    }
+}
+
 pub struct ArithRewrite {
     name: String,
-    /// most general lhs pattern
+    /// lhs pattern
     lhs: Pattern<Arith>,
-    /// rhs pattern with all widths derived from the lhs, maybe be the same as rhs
-    rhs_derived: Pattern<Arith>,
-    /// variables use by the condition
-    cond_vars: Vec<Var>,
-    /// condition of the re_write
-    cond: Option<fn(&[WidthInt]) -> bool>,
+    /// rhs pattern
+    rhs: Pattern<Arith>,
+    /// constraints on widths
+    constraints: Vec<(Var, WidthConstraint)>,
 }
 
 pub type Rewrite = egg::Rewrite<Arith, WidthConstantFold>;
@@ -113,22 +140,17 @@ impl ArithRewrite {
     fn new<S: AsRef<str>>(
         name: &str,
         lhs: &str,
-        rhs_derived: &str,
-        cond_vars: impl IntoIterator<Item = S>,
-        cond: Option<fn(&[WidthInt]) -> bool>,
+        rhs: &str,
+        constraints: impl IntoIterator<Item = (S, WidthConstraint)>,
     ) -> Self {
-        let cond_vars = cond_vars
-            .into_iter()
-            .map(|n| n.as_ref().parse().unwrap())
-            .collect();
         let lhs = lhs.parse::<_>().unwrap();
         check_width_consistency(&lhs);
-        let rhs_derived = rhs_derived.parse::<_>().unwrap();
-        check_width_consistency(&rhs_derived);
+        let rhs = rhs.parse::<_>().unwrap();
+        check_width_consistency(&rhs);
         Self {
             name: name.to_string(),
             lhs,
-            rhs_derived,
+            rhs,
             cond,
             cond_vars,
         }
@@ -139,7 +161,7 @@ impl ArithRewrite {
     }
 
     pub fn patterns(&self) -> (&PatternAst<Arith>, &PatternAst<Arith>) {
-        (&self.lhs.ast, &self.rhs_derived.ast)
+        (&self.lhs.ast, &self.rhs.ast)
     }
 
     pub fn to_egg(&self) -> Vec<Rewrite> {
@@ -205,6 +227,41 @@ impl ArithRewrite {
                 })
             })
             .collect()
+    }
+}
+
+/// Custom implementation of an egg::Applier
+struct ArithRewriteApplier {
+    ast: PatternAst<Arith>,
+    vars: Vec<Var>,
+    rhs: Vec<RewriteExpr>,
+}
+
+/// Similar to egg's ENodeOrVar but with a third possibility
+enum RewriteExpr {
+    Subst(Var),
+    ENode(Arith),
+    CalcWidth(WidthConstraint, Var, Var),
+}
+
+impl<N: Analysis<Arith>> egg::Applier<Arith, N> for ArithRewriteApplier {
+    fn get_pattern_ast(&self) -> Option<&PatternAst<Arith>> {
+        Some(&self.ast)
+    }
+
+    fn apply_one(
+        &self,
+        egraph: &mut egg::EGraph<Arith, N>,
+        eclass: Id,
+        subst: &Subst,
+        searcher_ast: Option<&PatternAst<Arith>>,
+        rule_name: Symbol,
+    ) -> Vec<Id> {
+        todo!()
+    }
+
+    fn vars(&self) -> Vec<Var> {
+        self.vars.clone()
     }
 }
 
