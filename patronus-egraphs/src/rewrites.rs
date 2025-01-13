@@ -96,6 +96,8 @@ fn lsh_no_ov(wo: WidthInt, wa: WidthInt, wb: WidthInt) -> bool {
     wo >= eval_width_left_shift(wa, wb)
 }
 
+/// Represents a constraint for a width. Can be used to check whether a rewrite can be applied,
+/// as well as to derive a legal width for the right-hand-side of a rewrite.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum WidthConstraint {
     AddNoOverflow(Var, Var),
