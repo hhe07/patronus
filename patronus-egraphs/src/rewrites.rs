@@ -10,7 +10,7 @@ introspect them in order to check re-write conditions or debug matches.
 !*/
 
 use crate::arithmetic::{eval_width_left_shift, eval_width_max_plus_1};
-use crate::{get_const_width_or_sign, is_bin_op, Arith, EGraph, WidthConstantFold};
+use crate::{get_const_width_or_sign, is_bin_op, Arith, EGraph, WidthConstantFold, WidthValue};
 use egg::{
     Analysis, ConditionalApplier, ENodeOrVar, Id, Language, Pattern, PatternAst, Searcher, Subst,
     Symbol, Var,
@@ -108,18 +108,18 @@ pub enum WidthConstraint {
 impl WidthConstraint {
     /// generates an output width that satisfied the constraint while trying to be minimal
     #[inline]
-    fn min_out_width(&self, get_value: fn(Var) -> WidthInt) -> Option<WidthInt> {
+    fn min_out_width(&self, get_value: fn(Var) -> WidthInt) -> WidthInt {
         match *self {
-            WidthConstraint::AddNoOverflow(wa, wb) => Some(max(get_value(wa), get_value(wb)) + 1),
-            WidthConstraint::MulNoOverflow(wa, wb) => Some(get_value(wa) + get_value(wb)),
+            WidthConstraint::AddNoOverflow(wa, wb) => max(get_value(wa), get_value(wb)) + 1,
+            WidthConstraint::MulNoOverflow(wa, wb) => get_value(wa) + get_value(wb),
             WidthConstraint::LeftShiftNoOverflow(wa, wb) => {
                 let wb = get_value(wb);
                 if wb >= WidthInt::BITS {
                     // very very very large width, not what you want
-                    Some(WidthInt::MAX)
+                    WidthInt::MAX
                 } else {
                     let max_shift: WidthInt = (1 << wb) - 1;
-                    Some(get_value(wa) + max_shift)
+                    get_value(wa) + max_shift
                 }
             }
         }
@@ -243,7 +243,7 @@ struct ArithRewriteApplier {
 enum RewriteExpr {
     Subst(Var),
     ENode(Arith),
-    CalcWidth(WidthConstraint, Var, Var),
+    CalcWidth(WidthConstraint),
 }
 
 impl<N: Analysis<Arith>> egg::Applier<Arith, N> for ArithRewriteApplier {
@@ -259,7 +259,29 @@ impl<N: Analysis<Arith>> egg::Applier<Arith, N> for ArithRewriteApplier {
         searcher_ast: Option<&PatternAst<Arith>>,
         rule_name: Symbol,
     ) -> Vec<Id> {
-        todo!()
+        // similar to eggs implementation for patterns
+        let mut ids = vec![0.into(); self.rhs.len()];
+
+        // apply_pat
+        for (i, n) in self.rhs.iter().enumerate() {
+            let id = match n {
+                &RewriteExpr::Subst(w) => subst[w],
+                RewriteExpr::ENode(e) => {
+                    let n = e.clone().map_children(|child| ids[usize::from(child)]);
+                    egraph.add(n)
+                }
+                RewriteExpr::CalcWidth(c) => {
+                    let get = |var: Var| -> WidthInt {
+                        get_const_width_or_sign(egraph, subst[var]).unwrap()
+                    };
+                    let value = c.min_out_width(get);
+                    let n = Arith::Width(value.into());
+                    egraph.add(n)
+                }
+            };
+            ids[i] = id;
+        }
+        let id = *ids.last().unwrap();
     }
 
     fn vars(&self) -> Vec<Var> {

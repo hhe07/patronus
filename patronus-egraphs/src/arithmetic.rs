@@ -485,7 +485,10 @@ pub type EGraph = egg::EGraph<Arith, WidthConstantFold>;
 
 /// Finds a width or sign constant in the e-class referred to by the substitution
 /// and returns its value. Errors if no such constant can be found.
-pub fn get_const_width_or_sign(egraph: &EGraph, id: Id) -> Option<WidthInt> {
+pub fn get_const_width_or_sign<A: Analysis<Arith>>(
+    egraph: &egg::EGraph<Arith, A>,
+    id: Id,
+) -> Option<WidthInt> {
     egraph[id]
         .nodes
         .iter()
