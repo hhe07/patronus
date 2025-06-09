@@ -155,3 +155,12 @@ fn serialize_inverter() {
     assert_eq!(outputs, ["s"]);
     insta::assert_snapshot!(sys.serialize_to_str(&ctx));
 }
+
+#[test]
+fn parse_llsdspi_bug_c1_instrumented() {
+    let (mut ctx, mut sys) =
+        btor2::parse_file("../inputs/repair/llsdspi_bug_c1.instrumented.btor").unwrap();
+    replace_anonymous_inputs_with_zero(&mut ctx, &mut sys);
+    simplify_expressions(&mut ctx, &mut sys);
+    println!("{}", sys.serialize_to_str(&ctx));
+}
