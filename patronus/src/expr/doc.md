@@ -268,6 +268,309 @@ fields:
 - inp: a reference to the string input
 - symbols: a hashmap presumably matching strings to exprreferences
 
+### Arg
+enum:
+- E: ExprRef
+- C: WidthInt
+
+### ArgTpe
+enum:
+E,C
+
+- ques: unsure what this does
+
+impl Parser:
+- new:
+  - trims input of leading / trailing spaces, attaches context, creates new symbol table
+- parse_expr_all:
+  - attempts to call parse_expr, returns ExprRef.
+  - if empty string, assert error
+  - crit: assertion before call?
+- parse_expr:
+  - try parsing using the function, bv_lit, or symbol methods. panic if parsing fails
+  - if the result is additionally a slice, attempt to create a slice from the correct type.
+- width_int:
+  - for a given match, attempt to parse it into a WidthInt?
+- try_parse_fun:
+  - attempt to match against a function and create it
+- try_pars_bv_lit
+  - attempt to match against the different types of bitvector literal (bin, dec, hex, or bool) and add it
+  - crit: inconsistent naming
+- try_parse_symbol:
+  - attempt to create a symbol out of the line, optionally with a width
+  - ques: "do we have an explicit bv type" comment
+  - crit: potentially simplifiable?
+- make_fun:
+  - add a symbol to context based on the function id
+  - crit: again, hardcoding -- more efficient way leveraging type system?
+  - TODO here
+- parse_args
+  - given the type of function and a table of expected args, attempt to create a vector containing the args to current input in order
+- try_parse_width_int
+  - attempt to parse a line for a WidthInt (a decimal number)
+  - ques: any way this could break?
+- consume_r
+  - consume from the first match of an arbitrary regex
+- consume_m
+  - consume (advance in input string) from the end of a match to the end of the input
+- consume_c
+  - given a list of captures, consume from after the first
+- crit: possible parallelism in dividing into lines first?
+- crit: have regex in a file and not hard-coded?
+
+const FUNCTIONS: a list of functions
+const FUNCTION_ARGS: a list of args for said functions
+
+lazy_static! block: regex expressions for the possible parse inputs
+  - interesting regex set thing: used when constructing a function id (a direct map to an index in array)
+
+- ques: how to accomodate comments? more generic optional extra arg?
+
+# serialize.rs
+## SerializableIrNode
+trait methods:
+- serialize: given a context and writer, return a result
+- serialize_to_str: use the serialize function to write result into a vec (presumably utf8), and return its contents as a string
+
+impl for Expr:
+- wraps the serialize_expr function, using a lambda which returns true to enable max descent
+
+- serialize_expr:
+  - parameter serialize_child must be a function of ExprRef and W that returns a bool as a result
+  - W must implement the Write trait
+  - matching over Expr, write a suitable representation of the expr to the result
+    - crit: generic form for each type of formula?
+  - symbol names are obtained from ctx
+  - serialize_child is used to continue recursion
+- serialize_expr_ref:
+  - obtains the expr corresponding to ExprRef from context, and continues serialisation
+- SerializableIRNode for ExprRef:
+  - presumably to handle some cases where descent is limited.
+  - serializes based on the entry in the context
+- SerializeIRNode for Type:
+  - write self to writer
+
+
+# simplify.rs
+- simplify_single_expression:
+  - given a context and an ExprRef, creates a new simplifier and applies it to only that ExprRef
+
+## Simplifier:
+fields:
+- cache: a generic ExprMap over an option of ExprRefs
+
+impl Simplifier:
+- new: creates cache
+- simplify:
+  - given context and an ExprRef, run do_transform_expr with ctx, FixedPoint, the cache, a vector containing the ExprRef, and simplify as parameters
+  - attempt to get the fixed point expression from cache and return it as result
+
+- simplify:
+  - given a context, an exprref, and a list of child exprrefs:
+    - matching against a copy of the Expr and its children, call the simplifier for the Expr type
+      - crit: in-place method?
+- simplify_ite:
+  - crit: tru, fals are clunky names?
+  - if both returns are equal, return one
+  - if the condition is constant, return the value it corresponds to
+  - if the returns are 'opposing' bools, return the corresponding logical function
+  - if one of the returns is a bool, return a logical function
+    - crit: way of deduplicating?
+
+## Lits
+enum:
+- Two: two literals
+- One: a tuple containing a tuple of literal and ExprRef, and then an ExprRef
+
+- find_lits_commutative:
+  - given two children of a commutative function, return the literals
+    - if both children are literals, return a pair
+    - if only one is a literal, return a One with the inner tuple containing the literal
+      - crit: why additionally return both?
+- find_one_concat:
+  - given two children of a function, if either is a concat, return the concat components plus the non-concat child
+    - crit: width discarded?
+- simplify_bv_equal:
+  - if args equal (key => value), return True
+  - if two literals, make sure actually different values (debug). since diff. hash implies diff. value, return False
+  - if reduces to a comparison (i.e. x == True/False), return equivalent expression
+    - ques: any problems with >1 width?
+  - if comparing against a concat, compare the parts individually against their corresponding parts of ``other``
+    - crit: is this actually more efficient?
+    - crit: simplification of 'split' concats: i.e. {x, 2'b00} and a signal to return a constant or something
+- simplify_bv_and
+  - if the values are equivalent, return input
+  - if both of the values are literals, return another literal with the concrete value
+  - if one of the values is a literal:
+    - if one is zero, return zero
+    - if one is one, return the other value
+    - if concat & mask, split mask through concat
+      - crit: further descent?
+    - otherwise, if a normal signal and a mask, reduce into a concat of active wires and the zeroes
+      - crit: what if turned into a concat of ternaries? also, performance of code block and within solver?
+    - otherwise, if neither value is a literal:
+      - if either is a not of the other, return zero
+      - if de morgan's, apply the relevant simplification
+- simplify_bv_or
+  - if args equal, return the arg
+  - if both values literal, get concrete value
+  - if one value literal:
+    - if one is zero, return arg
+    - if one is one, return 1
+    - todo: concat | mask type of deal
+  - otherwise, handle a | !a and de morgan's law cases
+    - crit: de morgan's law is a bit bad?
+- simplify_bv_xor
+  - xor with self is zero
+  - if both values literal, get concrete value
+  - if one value literal:
+    - if one is zero, return arg
+    - if one is 1, return !a
+    - todo: concat xor mask type of deal
+  - xor with inverse of self is one
+- simplify_bv_not
+  - undo double negations
+  - replace negations of literals with literal
+- simplify_bv_zero_ext
+  - eliminate extension by zero bits
+  - replace extension of literal with literal
+  - otherwise, normalise to concat
+- simplify_bv_sign_ext
+  - eliminate extension by zero bits
+  - replace extension of literal with literal
+  - otherwise, don't simplify?
+    - todo: reduce to concat?
+- simplify_bv_concat:
+  - if the concat contains another concat, shift it over to be right recursive
+  - if the components are literals, replace to literal
+  - if one is literal and the other is a concat:
+    - if it's possible to 'extend' the literal, do so
+  - if both are adjacent slices of the same bitvector, return a slice of the whole
+- simplify_bv_slice
+  - if slicing a slice, combine slices
+  - if slicing a constant, extract a constant
+  - if slicing a concat, depending on the slice point, either return a slice of only one signal or a more restricted concat
+  - if slicing a sign extend, either slice the internal (reducing size), or expand to size
+  - if slicing an ite, return an ite whose arguments are sliced
+  - if slicing a not, reverse order (not the slice)
+    - ques: will this possibly result in inefficiency: what if the not of the whole symbol is reused
+    - ques: general guidelines / restrictions on whether to keep signals unsliced or sliced
+  - if slicing an xor or or, do the same
+  - if slicing an arithmetic op with carry, don't actually do the carry
+- simplify_bv_shift_left:
+  - replace operation on literals with another literal
+  - if shift is by a literal:
+    - if exceeds width, return zeroes.
+    - if no shift, return the same value
+    - otherwise, replace with a concat
+  - if shift amount is larger than a u64, clear to zero
+    - crit: will this cause problems with larger system (i.e. does it correspond to word size?)
+- simplify_bv_shift_right:
+  - replace operation on literals with another literal
+  - if shift is by a literal:
+    - if exceeds width, return zeroes
+    - if no shift, return same value
+    - otherwise, replace with a zero extension
+- simplify_bv_arithmetic_shift_right
+  - similar as above, except replace with sign extension
+- simplify_bv_add:
+  - replace operation on literals with another literal
+  - replace addition of zero with original value
+- simplify_bv_mul:
+  - replace operation on literals with another literal
+  - multiplication by zero or 1 gets replaced with a constant
+  - multiplication by power of two gets replaced with a shiftleft
+- TODO: simplify_bv_sub?
+
+- crit: don't love the presence of arithmetic ops? but also idk
+- crit: zero extension seems redundant with concat
+
+
+# transform.rs
+## ExprTransformMode
+derives Debug, Copy, Clone, Eq, PartialEq
+types:
+- SingleStep
+- FixedPoint
+
+simple_transform_expr:
+- "transform with a single step (no fixed point) and no persistent cache"
+- expects a context, an expression reference, and a transformation function
+  - the transformation function should accept a context, exprref, and a list of exprrefs; and output an option exprref
+- create a SparseExprMap
+- call do_transform_expr
+- get the mapped value corresponding to the input exprref from the cache
+
+do_transform_expr:
+- create a vector for children
+- while there are still exprrefs on the todo stack:
+  - reset children vector, children_changed = false, all_transformed = true
+  - for each child of an expr_ref:
+    - transformed_child is either the fixed point version, or the one directly from the store of transformed values
+    - match:
+      - if something was returned:
+        - if it's a distinct reference, something's changed: set children_changed
+        - add the child expression to children vector
+      - if nothing was returned:
+        - if everything transformed, push the expression
+        - reset all_transformed and push the child
+  - if not all children were transformed, restart loop iteration (child now on top)
+  - then, call the transform
+    - if the result was something, set new_expr_ref to it
+    - if the result was nothing:
+      - if children changed, update children
+      - if no children changed and transform does not apply changes, keep old expression
+  - store transformed expression (possibly none)
+  - if in fixed point mode, and not at the fixed point and if the transformed result is not in the transformed store
+      - ques: (expr_ref == new_expr_ref)??
+      - add the new expression back to todo
+
+update_expr_children:
+- match the expr type
+  - replace inputs to the expression with new, possibly changed children
+  - TODO: some expressions could be missing
+- add the new expression to the context
+
+# traversal.rs
+bottom_up:
+- operates on generic R, returns R
+- accepts a context, ExprRef, and a function f with mutable receiver that accepts a context, exprref, and a reference to a slice of R
+- call bottom_up_multi_pat, with a get_children function which adds each child of the expression to a vector
+
+bottom_up_multi_pat
+- accepts a context, ExprRef, a get_children function, and a function f like above
+- create a todo vector, a stack, and a child vector
+  - todo vector stores tuples of (exprref, bool)
+  - the bool represents "bottom up"
+- while the todo list is not empty:
+  - obtain a reference to the expr pointed at by the stack entry
+  - if not bottom up:
+    - assert child_vec is empty
+    - get children into child_vec
+    - push the first child onto todo as bottom up; push others as not bottom up
+    - continue
+  - exiting this implies that have arrived at 'the bottom layer'
+  - get the child values from stack
+    - len returns num elements, not the capacity
+    - in base case, there are no values
+  - call f with the context, exprref, and values
+  - truncate the stack to the values not used in above
+  - push the result to stack
+- ultimately, there should be one thing on stack, which is popped and unwrapped
+
+- ques: what's the 'match patterns with multiple nodes' thing -- the fact that stack and such can be of semi-arbitrary len?
+
+## enum TraversalCmd
+- values Stop, Continue
+
+top_down:
+- accepts a context, ExprRef, and a function f with mutable receiver that accepts a context and exprref and reports whether to stop or continue
+- creates a todo vector
+- while there are still exprs to visit:
+  - check whether to continue
+  - if should continue, add each child of the current expr to todo
+
+- ques: can f in top_down mutate, for example, a list within its context to do something during the expression visiting?
 
 
 
@@ -280,3 +583,18 @@ TODO:
 - feature: allow selection of specific parts of the ast, allow certain symbolic inputs within expressions (lazy evaluation of sorts)
   - first, simplify model with inputs as abstract, then 'reattach' inputs, and re-simplify with reasoning about possible inputs
 
+- don't understand fixed point thing
+
+
+- context compression / elimination of unnecessary terms?
+
+- how to handle de morgan's and other shit in simplfication
+- k-maps?
+
+reducing all to ternaries?
+
+commutative trait?
+
+automatic simplification while constructing from signal source: will this create more inefficiency?
+
+do enum structs all have to have different type?
